@@ -24,24 +24,24 @@
 # make sure we aren't using floor division
 from __future__ import division, with_statement
 
-PACKAGE_NAME='mongodb_log'
-NODE_NAME='mongodb_log'
-NODE_NAME_TEMPLATE='%smongodb_log'
+PACKAGE_NAME = 'mongodb_log'
+NODE_NAME = 'mongodb_log'
+NODE_NAME_TEMPLATE = '%smongodb_log'
 WORKER_NODE_NAME = "%smongodb_log_worker_%d_%s"
 QUEUE_MAXSIZE = 100
 
-import roslib; roslib.load_manifest(PACKAGE_NAME)
+import roslib
+roslib.load_manifest(PACKAGE_NAME)
 
 import os
 import re
 import sys
 import time
-import pprint
 import string
 import socket
 import subprocess
 from threading import Thread, Timer
-from multiprocessing import Process, Lock, Condition, Queue, Value, current_process, Event
+from multiprocessing import Process, Lock, Condition, Queue, Value, current_process
 from Queue import Empty
 from optparse import OptionParser
 from tempfile import mktemp
@@ -55,25 +55,20 @@ from roslib.packages import find_node
 from designator_integration_msgs.msg import DesignatorRequest
 from designator_integration_msgs.msg import DesignatorResponse
 from designator_integration_msgs.msg import Designator
-#from rviz_intel.msg import TriangleMesh
 
-use_setproctitle = True
+
 try:
     from setproctitle import setproctitle
+    use_setProcessTitle = True
 except ImportError:
-    use_setproctitle = False
+    use_setProcessTitle = False
 
 import genpy
 import rospy
 import rosgraph.masterapi
-import roslib.message
-#from rospy import Time, Duration
 import rostopic
-import rrdtool
-
 from pymongo import Connection, SLOW_ONLY
 from pymongo.errors import InvalidDocument, InvalidStringData
-
 import rrdtool
 
 BACKLOG_WARN_LIMIT = 100
@@ -110,11 +105,11 @@ class Barrier(object):
             self.mutex.release()
 
 
-class WorkerProcess(object):
+class WorkerProcess(Process):
     def __init__(self, idnum, topic, collname, in_counter_value, out_counter_value,
                  drop_counter_value, queue_maxsize,
                  mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-        self.name = "WorkerProcess-%4d-%s" % (idnum, topic)
+        super(WorkerProcess, self).__init__(name="WorkerProcess-%4d-%s" % (idnum, topic))
         self.id = idnum
         self.topic = topic
         self.collname = collname
@@ -131,12 +126,13 @@ class WorkerProcess(object):
         self.nodename_prefix = nodename_prefix
         self.quit = Value('i', 0)
 
-        self.process = Process(name=self.name, target=self.run)
-        self.process.start()
+    @property
+    def process(self):
+        return self
 
     def init(self):
         global use_setproctitle
-	if use_setproctitle:
+        if use_setproctitle:
             setproctitle("mongodb_log %s" % self.topic)
 
         self.mongoconn = Connection(self.mongodb_host, self.mongodb_port)
@@ -147,9 +143,7 @@ class WorkerProcess(object):
         self.collection.count()
 
         self.queue.cancel_join_thread()
-
-        rospy.init_node(WORKER_NODE_NAME % (self.nodename_prefix, self.id, self.collname),
-                        anonymous=False)
+        rospy.init_node(WORKER_NODE_NAME % (self.nodename_prefix, self.id, self.collname), anonymous=False)
 
         self.subscriber = None
         while not self.subscriber:
@@ -166,27 +160,30 @@ class WorkerProcess(object):
 
     def run(self):
         self.init()
-
         print("ACTIVE: %s" % self.name)
-
         # run the thread
-        self.dequeue()
+        while not self.is_quit():
+            self.dequeue()
 
-        # free connection
-        # self.mongoconn.end_request()
+        # we must make sure to clear the queue before exiting,
+        # or the parent thread might deadlock otherwise
+        self.subscriber.unregister()
+        self.subscriber = None
+        while not self.queue.empty():
+            t = self.queue.get_nowait()
+        print("STOPPED: %s" % self.name)
 
     def is_quit(self):
         return self.quit.value == 1
 
     def shutdown(self):
         if not self.is_quit():
-            #print("SHUTDOWN %s qsize %d" % (self.name, self.queue.qsize()))
             self.quit.value = 1
             self.queue.put("shutdown")
-            while not self.queue.empty(): sleep(0.1)
-        #print("JOIN %s qsize %d" % (self.name, self.queue.qsize()))
-        self.process.join()
-        self.process.terminate()
+            while not self.queue.empty():
+                sleep(0.1)
+        self.join()
+        self.terminate()
 
     def sanitize_value(self, v):
         if isinstance(v, rospy.Message):
@@ -219,63 +216,41 @@ class WorkerProcess(object):
                     self.worker_drop_counter.increment()
                 except Empty:
                     pass
-            #self.queue.put((topic, data, current_time or datetime.now()))
             self.queue.put((topic, data, rospy.get_time()))
             self.in_counter.increment()
             self.worker_in_counter.increment()
 
     def dequeue(self):
-        while not self.is_quit():
-            t = None
-            try:
-                t = self.queue.get(True)
-            except IOError:
-                # Anticipate Ctrl-C
-                #print("Quit W1: %s" % self.name)
-                self.quit.value = 1
-                break
-            if isinstance(t, tuple):
-                self.out_counter.increment()
-                self.worker_out_counter.increment()
-                topic = t[0]
-                msg   = t[1]
-                ctime = t[2]
+        try:
+            t = self.queue.get(True)
+        except IOError:
+            self.quit.value = 1
+            return
+        if isinstance(t, tuple):
+            self.out_counter.increment()
+            self.worker_out_counter.increment()
+            topic = t[0]
+            msg   = t[1]
+            ctime = t[2]
 
-                if isinstance(msg, rospy.Message):
-                    doc = self.message_to_dict(msg)
-                    doc["__recorded"] = ctime or datetime.now()
-                    doc["__topic"]    = topic
-                    try:
-                        #print(self.sep + threading.current_thread().getName() + "@" + topic+": ")
-                        #pprint.pprint(doc)
-                        self.collection.insert(doc)
-                    except InvalidDocument, e:
-                        print("InvalidDocument " + current_process().name + "@" + topic +": \n")
-                        print e
-                    except InvalidStringData, e:
-                        print("InvalidStringData " + current_process().name + "@" + topic +": \n")
-                        print e
-
-            else:
-                #print("Quit W2: %s" % self.name)
-                self.quit.value = 1
-
-        # we must make sure to clear the queue before exiting,
-        # or the parent thread might deadlock otherwise
-        #print("Quit W3: %s" % self.name)
-        self.subscriber.unregister()
-        self.subscriber = None
-        while not self.queue.empty():
-            t = self.queue.get_nowait()
-        print("STOPPED: %s" % self.name)
+            if isinstance(msg, rospy.Message):
+                doc = self.message_to_dict(msg)
+                doc["__recorded"] = ctime or datetime.now()
+                doc["__topic"]    = topic
+                try:
+                    self.collection.insert(doc)
+                except (InvalidStringData, InvalidDocument), e:
+                    print("%s %s@%s:\n%s" % (e.__class__.__name__, current_process().name, topic, e))
+        else:
+            self.quit.value = 1
 
 
-class SubprocessWorker(object):
+class SubprocessWorker(Process):
     def __init__(self, idnum, topic, collname, in_counter_value, out_counter_value,
                  drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix, cpp_logger, additional_parameters = []):
+                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix, cpp_logger, additional_parameters=None):
 
-        self.name = "SubprocessWorker-%4d-%s" % (idnum, topic)
+        super(SubprocessWorker, self).__init__(name="SubprocessWorker-%4d-%s" % (idnum, topic))
         self.id = idnum
         self.topic = topic
         self.collname = collname
@@ -293,17 +268,14 @@ class SubprocessWorker(object):
         self.quit = False
         self.qsize = 0
 
-        self.thread = Thread(name=self.name, target=self.run)
-
         mongodb_host_port = "%s:%d" % (mongodb_host, mongodb_port)
         collection = "%s.%s" % (mongodb_name, collname)
         nodename = WORKER_NODE_NAME % (self.nodename_prefix, self.id, self.collname)
-        
+
+        additional_parameters = additional_parameters if additional_parameters is not None else []
         self.process = subprocess.Popen([cpp_logger, "-t", topic, "-n", nodename,
                                          "-m", mongodb_host_port, "-c", collection] + additional_parameters,
                                         stdout=subprocess.PIPE)
-
-        self.thread.start()
 
     def qsize(self):
         return self.qsize
@@ -329,10 +301,10 @@ class SubprocessWorker(object):
 
 
 class MongoWriter(object):
-    def __init__(self, topics = [], graph_topics = False,
+    def __init__(self, topics=None, graph_topics = False,
                  graph_dir = ".", graph_clear = False, graph_daemon = False,
                  all_topics = False, all_topics_interval = 5,
-                 exclude_topics = [],
+                 exclude_topics=None,
                  mongodb_host=None, mongodb_port=None, mongodb_name="roslog",
                  no_specific=False, nodename_prefix=""):
         self.graph_dir = graph_dir
@@ -341,7 +313,7 @@ class MongoWriter(object):
         self.graph_daemon = graph_daemon
         self.all_topics = all_topics
         self.all_topics_interval = all_topics_interval
-        self.exclude_topics = exclude_topics
+        self.exclude_topics = exclude_topics if exclude_topics is not None else []
         self.mongodb_host = mongodb_host
         self.mongodb_port = mongodb_port
         self.mongodb_name = mongodb_name
@@ -349,7 +321,6 @@ class MongoWriter(object):
         self.nodename_prefix = nodename_prefix
         self.quit = False
         self.topics = set()
-        #self.str_fn = roslib.message.strify_message
         self.sep = "\n" #'\033[2J\033[;H'
         self.in_counter = Counter()
         self.out_counter = Counter()
@@ -370,13 +341,12 @@ class MongoWriter(object):
 
         self.init_rrd()
 
-        self.subscribe_topics(set(topics))
+        self.subscribe_topics(set(topics if topics is not None else []))
         if self.all_topics:
             print("All topics")
             self.ros_master = rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % self.nodename_prefix)
             self.update_topics(restart=False)
         rospy.init_node(NODE_NAME_TEMPLATE % self.nodename_prefix, anonymous=True)
-
         self.start_all_topics_timer()
 
     def subscribe_topics(self, topics):
@@ -407,22 +377,19 @@ class MongoWriter(object):
             else:
                 print("Adding topic %s" % topic)
                 self.workers[collname] = self.create_worker(len(self.workers), topic, collname)
-                self.topics |= set([topic])
+                self.topics |= {topic}
 
     def create_worker(self, idnum, topic, collname):
         msg_class, real_topic, msg_eval = rostopic.get_topic_class(topic, blocking=True)
 
         w = None
         node_path = None
-        additional_parameters = [];
+        additional_parameters = []
        
         if not self.no_specific and (msg_class == tfMessage) or (msg_class == TFMessage):
             print("DETECTED transform topic %s, using fast C++ logger" % topic)
             node_path = find_node(PACKAGE_NAME, "mongodb_log_tf")
-            #additional_parameters = ["-a"]
-            #additional_parameters = ["-k" "0.005" "-l" "0.005" "-g" "0"]
-            #additional_parameters = ["-k" "0.025" "-l" "0.025" "-g" "0"]
-            
+
             # Log only when the preceeding entry of that
             # transformation had at least 0.100 vectorial and radial
             # distance to its predecessor transformation, but at least
@@ -481,8 +448,9 @@ class MongoWriter(object):
                               self.mongodb_host, self.mongodb_port, self.mongodb_name,
                               self.nodename_prefix)
 
-        if self.graph_topics: self.assert_worker_rrd(collname)
-        
+        if self.graph_topics:
+            self.assert_worker_rrd(collname)
+        w.start()
         return w
 
 
@@ -515,7 +483,6 @@ class MongoWriter(object):
         self.quit = True
         if hasattr(self, "all_topics_timer"): self.all_topics_timer.cancel()
         for name, w in self.workers.items():
-            #print("Shutdown %s" % name)
             w.shutdown()
 
         if self.graph_daemon:
@@ -534,7 +501,8 @@ class MongoWriter(object):
         topics = set([t for t, t_type in ts if t != "/rosout" and t != "/rosout_agg"])
         new_topics = topics - self.topics
         self.subscribe_topics(new_topics)
-        if restart: self.start_all_topics_timer()
+        if restart:
+            self.start_all_topics_timer()
 
     def get_memory_usage_for_pid(self, pid):
 
