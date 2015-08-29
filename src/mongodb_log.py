@@ -57,9 +57,9 @@ from designator_integration_msgs.msg import DesignatorResponse
 from designator_integration_msgs.msg import Designator
 
 
+use_setproctitle = True
 try:
     from setproctitle import setproctitle
-    use_setproctitle = True
 except ImportError:
     use_setproctitle = False
 
@@ -351,7 +351,6 @@ class MongoWriter(object):
             print("All topics")
             self.ros_master = rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % self.nodename_prefix)
             self.update_topics(restart=False)
-        rospy.init_node(NODE_NAME_TEMPLATE % self.nodename_prefix, anonymous=True)
         self.start_all_topics_timer()
 
     def subscribe_topics(self, topics):
@@ -550,7 +549,6 @@ class MongoWriter(object):
             size += pmem[0]
             rss += pmem[1]
             stack += pmem[2]
-        #print("Size: %d  RSS: %s  Stack: %s" % (size, rss, stack))
         return (size, rss, stack)
 
     def assert_rrd(self, file, *data_sources):
@@ -599,7 +597,6 @@ class MongoWriter(object):
                 td = datetime.now() - started
 
     def graph_rrd(self):
-        #print("Generating graphs")
         time_started = datetime.now()
         rrdtool.graph(["%s/logstats.png" % self.graph_dir,
                        "--start=-600", "--end=-10",
@@ -633,7 +630,6 @@ class MongoWriter(object):
 
         if self.graph_topics:
             for _, w in self.workers.items():
-                #worker_time_started = datetime.now()
                 rrdtool.graph(["%s/%s.png" % (self.graph_dir, w.collname),
                                "--start=-600", "--end=-10",
                                "--disable-rrdtool-tag", "--width=560",
@@ -663,9 +659,6 @@ class MongoWriter(object):
                                "GPRINT:drop:LAST:   Current\\:%8.2lf %s",
                                "GPRINT:drop:AVERAGE:Average\\:%8.2lf %s",
                                "GPRINT:drop:MAX:Maximum\\:%8.2lf %s\\n"])
-
-                #worker_time_elapsed = datetime.now() - worker_time_started
-                #print("Generated worker graph for %s, took %s" % (w.topic, worker_time_elapsed))
 
         rrdtool.graph(["%s/logmemory.png" % self.graph_dir,
                        "--start=-600", "--end=-10",
@@ -707,7 +700,6 @@ class MongoWriter(object):
             self.graph_pidfile = mktemp(prefix="rrd_", suffix=".pid")
             print("Starting rrdcached -l unix:%s -p %s -b %s -g" %
                   (self.graph_sockfile, self.graph_pidfile, self.graph_dir))
-            devnull = file('/dev/null', 'a+')
             self.graph_process = subprocess.Popen(["/usr/bin/rrdcached",
                                                    "-l", "unix:%s" % self.graph_sockfile,
                                                    "-p", self.graph_pidfile,
@@ -726,7 +718,6 @@ class MongoWriter(object):
         # we do not lock here, we are not interested in super-precise
         # values for this, but we do care for high performance processing
         qsize = 0
-        #print("Updating graphs")
         time_started = datetime.now()
         for _, w in self.workers.items():
             wqsize = w.queue.qsize()
