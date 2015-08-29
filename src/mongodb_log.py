@@ -59,9 +59,9 @@ from designator_integration_msgs.msg import Designator
 
 try:
     from setproctitle import setproctitle
-    use_setProcessTitle = True
+    use_setproctitle = True
 except ImportError:
-    use_setProcessTitle = False
+    use_setproctitle = False
 
 import genpy
 import rospy
@@ -72,19 +72,23 @@ from pymongo.errors import InvalidDocument, InvalidStringData
 import rrdtool
 
 BACKLOG_WARN_LIMIT = 100
-STATS_LOOPTIME     = 10
-STATS_GRAPHTIME    = 60
+STATS_LOOPTIME = 0
+STATS_GRAPHTIME = 60
+
 
 class Counter(object):
-    def __init__(self, value = None, lock = True):
+    def __init__(self, value=None, lock=True):
         self.count = value or Value('i', 0, lock=lock)
         self.mutex = Lock()
 
-    def increment(self, by = 1):
-        with self.mutex: self.count.value += by
+    def increment(self, by=1):
+        with self.mutex:
+            self.count.value += by
 
     def value(self):
-        with self.mutex: return self.count.value
+        with self.mutex:
+            return self.count.value
+
 
 class Barrier(object):
     def __init__(self, num_threads):
@@ -115,10 +119,10 @@ class WorkerProcess(Process):
         self.collname = collname
         self.queue = Queue(queue_maxsize)
         self.out_counter = Counter(out_counter_value)
-        self.in_counter  = Counter(in_counter_value)
+        self.in_counter = Counter(in_counter_value)
         self.drop_counter = Counter(drop_counter_value)
         self.worker_out_counter = Counter()
-        self.worker_in_counter  = Counter()
+        self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
         self.mongodb_host = mongodb_host
         self.mongodb_port = mongodb_port
@@ -131,7 +135,6 @@ class WorkerProcess(Process):
         return self
 
     def init(self):
-        global use_setproctitle
         if use_setproctitle:
             setproctitle("mongodb_log %s" % self.topic)
 
@@ -152,10 +155,10 @@ class WorkerProcess(Process):
                 self.subscriber = rospy.Subscriber(real_topic, msg_class, self.enqueue, self.topic)
             except rostopic.ROSTopicIOException:
                 print("FAILED to subscribe, will keep trying %s" % self.name)
-                time.sleep(randint(1,10))
+                time.sleep(randint(1, 10))
             except rospy.ROSInitException:
                 print("FAILED to initialize, will keep trying %s" % self.name)
-                time.sleep(randint(1,10))
+                time.sleep(randint(1, 10))
                 self.subscriber = None
 
     def run(self):
@@ -230,13 +233,13 @@ class WorkerProcess(Process):
             self.out_counter.increment()
             self.worker_out_counter.increment()
             topic = t[0]
-            msg   = t[1]
+            msg = t[1]
             ctime = t[2]
 
             if isinstance(msg, rospy.Message):
                 doc = self.message_to_dict(msg)
                 doc["__recorded"] = ctime or datetime.now()
-                doc["__topic"]    = topic
+                doc["__topic"] = topic
                 try:
                     self.collection.insert(doc)
                 except (InvalidStringData, InvalidDocument), e:
@@ -256,10 +259,10 @@ class SubprocessWorker(Process):
         self.collname = collname
         self.queue = Queue(queue_maxsize)
         self.out_counter = Counter(out_counter_value)
-        self.in_counter  = Counter(in_counter_value)
+        self.in_counter = Counter(in_counter_value)
         self.drop_counter = Counter(drop_counter_value)
         self.worker_out_counter = Counter()
-        self.worker_in_counter  = Counter()
+        self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
         self.mongodb_host = mongodb_host
         self.mongodb_port = mongodb_port
@@ -283,7 +286,8 @@ class SubprocessWorker(Process):
     def run(self):
         while not self.quit:
             line = self.process.stdout.readline().rstrip()
-            if line == "": continue
+            if line == "":
+                continue
             arr = string.split(line, ":")
             self.in_counter.increment(int(arr[0]))
             self.out_counter.increment(int(arr[1]))
@@ -301,9 +305,9 @@ class SubprocessWorker(Process):
 
 
 class MongoWriter(object):
-    def __init__(self, topics=None, graph_topics = False,
-                 graph_dir = ".", graph_clear = False, graph_daemon = False,
-                 all_topics = False, all_topics_interval = 5,
+    def __init__(self, topics=None, graph_topics=False,
+                 graph_dir=".", graph_clear=False, graph_daemon=False,
+                 all_topics=False, all_topics_interval=5,
                  exclude_topics=None,
                  mongodb_host=None, mongodb_port=None, mongodb_name="roslog",
                  no_specific=False, nodename_prefix=""):
@@ -321,16 +325,17 @@ class MongoWriter(object):
         self.nodename_prefix = nodename_prefix
         self.quit = False
         self.topics = set()
-        self.sep = "\n" #'\033[2J\033[;H'
+        self.sep = "\n"  # '\033[2J\033[;H'
         self.in_counter = Counter()
         self.out_counter = Counter()
         self.drop_counter = Counter()
         self.workers = {}
 
-        if self.graph_dir == ".": self.graph_dir = os.getcwd()
-        if not os.path.exists(self.graph_dir): os.makedirs(self.graph_dir)
+        if self.graph_dir == ".":
+            self.graph_dir = os.getcwd()
+        if not os.path.exists(self.graph_dir):
+            os.makedirs(self.graph_dir)
 
-        global use_setproctitle
         if use_setproctitle:
             setproctitle("mongodb_log MAIN")
 
@@ -354,8 +359,10 @@ class MongoWriter(object):
             if topic and topic[-1] == '/':
                 topic = topic[:-1]
 
-            if topic in self.topics: continue
-            if topic in self.exclude_already: continue
+            if topic in self.topics:
+                continue
+            if topic in self.exclude_already:
+                continue
 
             do_continue = False
             for tre in self.exclude_regex:
@@ -364,7 +371,8 @@ class MongoWriter(object):
                     do_continue = True
                     self.exclude_already.append(topic)
                     break
-            if do_continue: continue
+            if do_continue:
+                continue
 
             # although the collections is not strictly necessary, since MongoDB could handle
             # pure topic names as collection names and we could then use mongodb[topic], we want
@@ -385,7 +393,7 @@ class MongoWriter(object):
         w = None
         node_path = None
         additional_parameters = []
-       
+
         if not self.no_specific and (msg_class == tfMessage) or (msg_class == TFMessage):
             print("DETECTED transform topic %s, using fast C++ logger" % topic)
             node_path = find_node(PACKAGE_NAME, "mongodb_log_tf")
@@ -458,9 +466,8 @@ class MongoWriter(object):
         w.start()
         return w
 
-
     def run(self):
-        looping_threshold = timedelta(0, STATS_LOOPTIME,  0)
+        looping_threshold = timedelta(0, STATS_LOOPTIME, 0)
 
         self.graph_thread = Thread(name="RRDGrapherThread", target=self.graph_rrd_thread)
         self.graph_thread.daemon = True
@@ -479,14 +486,15 @@ class MongoWriter(object):
             # varying run-times and interrupted sleeps into account
             td = datetime.now() - started
             while not rospy.is_shutdown() and not self.quit and td < looping_threshold:
-                sleeptime = STATS_LOOPTIME - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
-                if sleeptime > 0: sleep(sleeptime)
+                sleeptime = STATS_LOOPTIME - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10 ** 6) / 10 ** 6
+                if sleeptime > 0:
+                    sleep(sleeptime)
                 td = datetime.now() - started
-
 
     def shutdown(self):
         self.quit = True
-        if hasattr(self, "all_topics_timer"): self.all_topics_timer.cancel()
+        if hasattr(self, "all_topics_timer"):
+            self.all_topics_timer.cancel()
         for name, w in self.workers.items():
             w.shutdown()
 
@@ -495,13 +503,14 @@ class MongoWriter(object):
             self.graph_process.wait()
 
     def start_all_topics_timer(self):
-        if not self.all_topics or self.quit: return
+        if not self.all_topics or self.quit:
+            return
         self.all_topics_timer = Timer(self.all_topics_interval, self.update_topics)
         self.all_topics_timer.start()
 
-
     def update_topics(self, restart=True):
-        if not self.all_topics or self.quit: return
+        if not self.all_topics or self.quit:
+            return
         ts = self.ros_master.getPublishedTopics("/")
         topics = set([t for t, t_type in ts if t != "/rosout" and t != "/rosout_agg"])
         new_topics = topics - self.topics
@@ -520,14 +529,15 @@ class MongoWriter(object):
         except:
             return (0, 0, 0)
 
-        if t == "": return (0, 0, 0)
+        if t == "":
+            return (0, 0, 0)
 
         try:
-            tmp   = t[t.index("VmSize:"):].split(None, 3)
-            size  = int(tmp[1]) * scale[tmp[2]]
-            tmp   = t[t.index("VmRSS:"):].split(None, 3)
-            rss   = int(tmp[1]) * scale[tmp[2]]
-            tmp   = t[t.index("VmStk:"):].split(None, 3)
+            tmp = t[t.index("VmSize:"):].split(None, 3)
+            size = int(tmp[1]) * scale[tmp[2]]
+            tmp = t[t.index("VmRSS:"):].split(None, 3)
+            rss = int(tmp[1]) * scale[tmp[2]]
+            tmp = t[t.index("VmStk:"):].split(None, 3)
             stack = int(tmp[1]) * scale[tmp[2]]
             return (size, rss, stack)
         except ValueError:
@@ -537,8 +547,8 @@ class MongoWriter(object):
         size, rss, stack = 0, 0, 0
         for _, w in self.workers.items():
             pmem = self.get_memory_usage_for_pid(w.process.pid)
-            size  += pmem[0]
-            rss   += pmem[1]
+            size += pmem[0]
+            rss += pmem[1]
             stack += pmem[2]
         #print("Size: %d  RSS: %s  Stack: %s" % (size, rss, stack))
         return (size, rss, stack)
@@ -548,12 +558,12 @@ class MongoWriter(object):
             rrdtool.create(file, "--step", "10", "--start", "0",
                            # remember that we always need to add the previous RRA time range
                            # hence number of rows is not directly calculated by desired time frame
-                           "RRA:AVERAGE:0.5:1:720",    #  2 hours of 10 sec  averages
-                           "RRA:AVERAGE:0.5:3:1680",   # 12 hours of 30 sec  averages
-                           "RRA:AVERAGE:0.5:30:456",   #  1 day   of  5 min  averages
-                           "RRA:AVERAGE:0.5:180:412",  #  7 days  of 30 min  averages
-                           "RRA:AVERAGE:0.5:720:439",  #  4 weeks of  2 hour averages
-                           "RRA:AVERAGE:0.5:8640:402", #  1 year  of  1 day averages
+                           "RRA:AVERAGE:0.5:1:720",     # 2 hours of 10 sec  averages
+                           "RRA:AVERAGE:0.5:3:1680",    # 12 hours of 30 sec  averages
+                           "RRA:AVERAGE:0.5:30:456",    # 1 day   of  5 min  averages
+                           "RRA:AVERAGE:0.5:180:412",   # 7 days  of 30 min  averages
+                           "RRA:AVERAGE:0.5:720:439",   # 4 weeks of  2 hour averages
+                           "RRA:AVERAGE:0.5:8640:402",  # 1 year  of  1 day averages
                            "RRA:MIN:0.5:1:720",
                            "RRA:MIN:0.5:3:1680",
                            "RRA:MIN:0.5:30:456",
@@ -569,21 +579,23 @@ class MongoWriter(object):
                            *data_sources)
 
     def graph_rrd_thread(self):
-        graphing_threshold = timedelta(0, STATS_GRAPHTIME - STATS_GRAPHTIME*0.01, 0)
+        graphing_threshold = timedelta(0, STATS_GRAPHTIME - STATS_GRAPHTIME * 0.01, 0)
         first_run = True
 
         while not rospy.is_shutdown() and not self.quit:
             started = datetime.now()
 
-            if not first_run: self.graph_rrd()
-            else: first_run = False
+            if not first_run:
+                self.graph_rrd()
+            first_run = False
 
             # the following code makes sure we run once per STATS_LOOPTIME, taking
             # varying run-times and interrupted sleeps into account
             td = datetime.now() - started
             while not rospy.is_shutdown() and not self.quit and td < graphing_threshold:
-                sleeptime = STATS_GRAPHTIME - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10**6) / 10**6
-                if sleeptime > 0: sleep(sleeptime)
+                sleeptime = STATS_GRAPHTIME - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10 ** 6) / 10 ** 6
+                if sleeptime > 0:
+                    sleep(sleeptime)
                 td = datetime.now() - started
 
     def graph_rrd(self):
@@ -655,7 +667,6 @@ class MongoWriter(object):
                 #worker_time_elapsed = datetime.now() - worker_time_started
                 #print("Generated worker graph for %s, took %s" % (w.topic, worker_time_elapsed))
 
-
         rrdtool.graph(["%s/logmemory.png" % self.graph_dir,
                        "--start=-600", "--end=-10",
                        "--disable-rrdtool-tag", "--width=560",
@@ -693,9 +704,9 @@ class MongoWriter(object):
         self.graph_args = []
         if self.graph_daemon:
             self.graph_sockfile = mktemp(prefix="rrd_", suffix=".sock")
-            self.graph_pidfile  = mktemp(prefix="rrd_", suffix=".pid")
+            self.graph_pidfile = mktemp(prefix="rrd_", suffix=".pid")
             print("Starting rrdcached -l unix:%s -p %s -b %s -g" %
-                  (self.graph_sockfile,self.graph_pidfile, self.graph_dir))
+                  (self.graph_sockfile, self.graph_pidfile, self.graph_dir))
             devnull = file('/dev/null', 'a+')
             self.graph_process = subprocess.Popen(["/usr/bin/rrdcached",
                                                    "-l", "unix:%s" % self.graph_sockfile,
@@ -711,7 +722,6 @@ class MongoWriter(object):
                         "DS:out:COUNTER:30:0:U",
                         "DS:drop:COUNTER:30:0:U")
 
-
     def update_rrd(self):
         # we do not lock here, we are not interested in super-precise
         # values for this, but we do care for high performance processing
@@ -721,7 +731,8 @@ class MongoWriter(object):
         for _, w in self.workers.items():
             wqsize = w.queue.qsize()
             qsize += wqsize
-            if wqsize > QUEUE_MAXSIZE/2: print("Excessive queue size %6d: %s" % (wqsize, w.name))
+            if wqsize > QUEUE_MAXSIZE / 2:
+                print("Excessive queue size %6d: %s" % (wqsize, w.name))
 
             if self.graph_topics:
                 rrdtool.update(["%s/%s.rrd" % (self.graph_dir, w.collname)]
@@ -793,13 +804,13 @@ def main(argv):
     except socket.error:
         print("Failed to communicate with master")
 
-    mongowriter = MongoWriter(topics=rospy.myargv(args), graph_topics = options.graph_topics,
-                              graph_dir = options.graph_dir,
-                              graph_clear = options.graph_clear,
-                              graph_daemon = options.graph_daemon,
+    mongowriter = MongoWriter(topics=rospy.myargv(args), graph_topics=options.graph_topics,
+                              graph_dir=options.graph_dir,
+                              graph_clear=options.graph_clear,
+                              graph_daemon=options.graph_daemon,
                               all_topics=options.all_topics,
-                              all_topics_interval = options.all_topics_interval,
-                              exclude_topics = options.exclude,
+                              all_topics_interval=options.all_topics_interval,
+                              exclude_topics=options.exclude,
                               mongodb_host=options.mongodb_host,
                               mongodb_port=options.mongodb_port,
                               mongodb_name=options.mongodb_name,
