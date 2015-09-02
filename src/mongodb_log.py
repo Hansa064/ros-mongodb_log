@@ -59,13 +59,6 @@ import rrdtool
 from random import randint
 
 
-use_setproctitle = True
-try:
-    from setproctitle import setproctitle
-except ImportError:
-    use_setproctitle = False
-
-
 class Counter(object):
     def __init__(self, value=None, lock=True):
         self.count = value or Value('i', 0, lock=lock)
@@ -80,6 +73,9 @@ class Counter(object):
             return self.count.value
 
 
+SPECIAL_LOGGERS = {}
+
+
 def register_logger(message, logger):
     """
     Registers a new specialized logger for the given message type.
@@ -91,7 +87,8 @@ def register_logger(message, logger):
     :param logger: The logger to use
     :type logger: MongoDBLogger
     """
-    MongoWriter.registerLogger(message, logger)
+    global SPECIAL_LOGGERS
+    SPECIAL_LOGGERS[message] = logger
 
 
 class MongoDBLogger(Process):
@@ -113,7 +110,7 @@ class MongoDBLogger(Process):
         :param id_: The ID of this logger process
         :type id_: int
         :param topic: The topic to log messages from
-        :type topic: basestring
+        :type topic: str
         :param collname: The name of the collection in the MongoDB to log messages to.
         :type collnae: basestring
         :param mongodb_host:The hostname or ip of the host running the MongoDB
@@ -127,7 +124,7 @@ class MongoDBLogger(Process):
         :return: A new MonoDBLogger instance
         :rtype: MongoDBLogger
         """
-        super(MongoDBLogger, self).__init__(name="%sMongoDBLogger-%d-%s" % (nodename_prefix, id_, topic))
+        super(MongoDBLogger, self).__init__(name="%smongodb_logger-%d-%s" % (nodename_prefix, id_, topic))
         self.id = id_
         self.topic = topic
         self.collname = collname
@@ -144,7 +141,6 @@ class MongoDBLogger(Process):
         """
         if not self.is_quit():
             self.quit.value = 1
-            self.queue.put("shutdown")
         self.join()
 
     def is_quit(self):
@@ -177,6 +173,7 @@ class MongoDBLogger(Process):
         """
         raise NotImplementedError()
 
+
 class TopicLogger(MongoDBLogger):
     """
     This class implements a generic topic logger.
@@ -199,8 +196,6 @@ class TopicLogger(MongoDBLogger):
         """
         rospy.logdebug("Inializing node %s" % self.nodename)
         rospy.init_node(self.nodename, anonymous=False)
-        if use_setproctitle:
-            setproctitle("mongodb_log %s" % self.topic)
 
         self.mongoconn = Connection(self.mongodb_host, self.mongodb_port)
         self.mongodb = self.mongoconn[self.mongodb_name]
@@ -241,6 +236,10 @@ class TopicLogger(MongoDBLogger):
         while not self.queue.empty():
             t = self.queue.get_nowait()
         rospy.logdebug("STOPPED: %s" % self.name)
+
+    def shutdown(self):
+        self.queue.put("shutdown")
+        super(TopicLogger, self).shutdown()
 
     def _sanitize_value(self, v):
         if isinstance(v, rospy.Message):
@@ -383,11 +382,6 @@ class MongoWriter(object):
                  exclude_topics=None,
                  mongodb_host=None, mongodb_port=None, mongodb_name="roslog",
                  no_specific=False, nodename_prefix="", stats_looptime=0):
-
-        # Register specialized loggers
-        from special_loggers import register_special_loggers
-        register_special_loggers()
-
         self.graph_dir = graph_dir
         self.graph_topics = graph_topics
         self.graph_clear = graph_clear
@@ -410,10 +404,6 @@ class MongoWriter(object):
             self.graph_dir = os.getcwd()
         if not os.path.exists(self.graph_dir):
             os.makedirs(self.graph_dir)
-
-        if use_setproctitle:
-            setproctitle("mongodb_log MAIN")
-
         self.exclude_regex = []
         for et in self.exclude_topics:
             self.exclude_regex.append(re.compile(et))
@@ -468,8 +458,8 @@ class MongoWriter(object):
     def create_worker(self, idnum, topic, collname):
         msg_class, _, _ = rostopic.get_topic_class(topic, blocking=True)
         logger = None
-        if not self.no_specific and msg_class in self.__special_logger:
-            loggerClass = self.__special_logger[msg_class]
+        if not self.no_specific and msg_class in SPECIAL_LOGGERS:
+            loggerClass = SPECIAL_LOGGERS[msg_class]
             try:
                 logger = loggerClass(idnum, topic, collname, self.mongodb_host, self.mongodb_port, self.mongodb_name,
                                      self.nodename_prefix)
@@ -822,6 +812,10 @@ def main(argv):
         rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % options.nodename_prefix).getPid()
     except socket.error:
         rospy.logerr("Failed to communicate with master")
+
+    # Register specialized loggers
+    from special_loggers import register_special_loggers
+    register_special_loggers()
 
     mongowriter = MongoWriter(topics=rospy.myargv(args), graph_topics=options.graph_topics,
                               graph_dir=options.graph_dir,
