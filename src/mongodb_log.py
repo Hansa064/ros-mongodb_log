@@ -20,24 +20,27 @@
 #  GNU Library General Public License for more details.
 #
 #  Read the full text in the LICENSE.GPL file in the doc directory.
-
 # make sure we aren't using floor division
 from __future__ import division, with_statement
 
+
+BACKLOG_WARN_LIMIT = 100
+STATS_GRAPHTIME = 60
 PACKAGE_NAME = 'mongodb_log'
 NODE_NAME = 'mongodb_log'
 NODE_NAME_TEMPLATE = '%smongodb_log'
 QUEUE_MAXSIZE = 100
 
+
 import roslib
 roslib.load_manifest(PACKAGE_NAME)
-
 import os
 import re
 import sys
 import time
 import string
 import socket
+import abc
 import subprocess
 from threading import Thread, Timer
 from multiprocessing import Process, Lock, Queue, Value, current_process
@@ -46,6 +49,13 @@ from optparse import OptionParser
 from tempfile import mktemp
 from datetime import datetime, timedelta
 from time import sleep
+import genpy
+import rospy
+import rosgraph.masterapi
+import rostopic
+from pymongo import Connection, SLOW_ONLY
+from pymongo.errors import InvalidDocument, InvalidStringData
+import rrdtool
 from random import randint
 
 
@@ -54,17 +64,6 @@ try:
     from setproctitle import setproctitle
 except ImportError:
     use_setproctitle = False
-
-import genpy
-import rospy
-import rosgraph.masterapi
-import rostopic
-from pymongo import Connection, SLOW_ONLY
-from pymongo.errors import InvalidDocument, InvalidStringData
-import rrdtool
-
-BACKLOG_WARN_LIMIT = 100
-STATS_GRAPHTIME = 60
 
 
 class Counter(object):
@@ -82,21 +81,56 @@ class Counter(object):
 
 
 def register_logger(message, logger):
+    """
+    Registers a new specialized logger for the given message type.
+    Whenever the Logger detects a topic of the given message type, it will create a new instance of the given logger
+    class and use this one for the logging.
+
+    :param message: The message type to use the specialized logger for.
+    :type message: object
+    :param logger: The logger to use
+    :type logger: MongoDBLogger
+    """
     MongoWriter.registerLogger(message, logger)
 
 
 class MongoDBLogger(Process):
+    """
+    This is the abstract base class for all loggers, who want to log to a mongodb.
+    This class creates a process and collects all informations necessary to connect to a mongodb.
+    It does _NOT_ create a connection to the MongoDB, as this might be done by special loggers.
+    This class does also _NOT_ subscribe to a Topic for the same reason.
+    """
 
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    __metaclass__ = abc.ABCMeta
+
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix=""):
+        """
+        Creates a new instance of the MongoDBLogger. This creates a new process to use for logging a topic.
+        This collects all necessary information to initalize a logger.
+        This method does _NOT_ start the process, as this will be done by the `start()`-Method.
+
+        :param id_: The ID of this logger process
+        :type id_: int
+        :param topic: The topic to log messages from
+        :type topic: basestring
+        :param collname: The name of the collection in the MongoDB to log messages to.
+        :type collnae: basestring
+        :param mongodb_host:The hostname or ip of the host running the MongoDB
+        :type mongodb_host: basestring
+        :param mongodb_port: The port on which the MongoDB is running on
+        :type mongodb_port: int
+        :param mongodb_name: The name of the databse to use for logging
+        :type mongodb_name: basestring
+        :param nodename_prefix: An optional prefix to use for the name of this Process
+        :type nodename_prefix: basestring
+        :return: A new MonoDBLogger instance
+        :rtype: MongoDBLogger
+        """
         super(MongoDBLogger, self).__init__(name="%sMongoDBLogger-%d-%s" % (nodename_prefix, id_, topic))
         self.id = id_
         self.topic = topic
         self.collname = collname
-        self.queue = Queue(queue_maxsize)
-        self.out_counter = Counter(out_counter_value)
-        self.in_counter = Counter(in_counter_value)
-        self.drop_counter = Counter(drop_counter_value)
         self.mongodb_host = mongodb_host
         self.mongodb_port = mongodb_port
         self.mongodb_name = mongodb_name
@@ -105,30 +139,64 @@ class MongoDBLogger(Process):
         self.quit = Value('i', 0)
 
     def shutdown(self):
+        """
+        Shuts down the running process and joins it back to the calling process.
+        """
         if not self.is_quit():
             self.quit.value = 1
             self.queue.put("shutdown")
         self.join()
 
     def is_quit(self):
+        """
+        Checks if this process should quit
+        :return: True if this process should quit
+        :rtype: bool
+        """
         return self.quit.value == 1
 
     @property
     def process(self):
+        """
+        Returns the process object of this Logger.
+        This property is designed to be overwritten by subclasses to return the correct process object.
+
+        :return: The process doint the actual logging
+        :rtype: Process
+        """
         return self
 
+    @abc.abstractmethod
+    def run(self):
+        """
+        This method implements the actual logging.
+        It will be executed in the child process and has to do the following things.
+            - Initialize a new ros node
+            - Create a connection to the MongoDB
+            - Do the actual logging
+        """
+        raise NotImplementedError()
 
-class LoggerProcess(MongoDBLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value,
-                 drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-        MongoDBLogger.__init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value,
-                               queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
+class TopicLogger(MongoDBLogger):
+    """
+    This class implements a generic topic logger.
+    It simply dumps all messages received from the topic into the MongoDB.
+    """
+
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
+                 max_queuesize=QUEUE_MAXSIZE):
+        MongoDBLogger.__init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
         self.worker_out_counter = Counter()
         self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
+        self.queue = Queue(max_queuesize)
 
-    def init(self):
+    def _init(self):
+        """
+        This method initializes this process.
+        It has to be called from within the child process, therefore it has to be called in the `run()`-Method.
+        It initializes a new ros node, the connection to the MongoDB and subscribes to the topic.
+        """
         rospy.logdebug("Inializing node %s" % self.nodename)
         rospy.init_node(self.nodename, anonymous=False)
         if use_setproctitle:
@@ -146,7 +214,7 @@ class LoggerProcess(MongoDBLogger):
         while not self.subscriber:
             try:
                 msg_class, real_topic, msg_eval = rostopic.get_topic_class(self.topic, blocking=True)
-                self.subscriber = rospy.Subscriber(real_topic, msg_class, self.enqueue, self.topic)
+                self.subscriber = rospy.Subscriber(real_topic, msg_class, self._enqueue, self.topic)
             except rostopic.ROSTopicIOException:
                 rospy.logwarn("FAILED to subscribe, will keep trying %s" % self.name)
                 time.sleep(randint(1, 10))
@@ -156,11 +224,15 @@ class LoggerProcess(MongoDBLogger):
                 self.subscriber = None
 
     def run(self):
-        self.init()
+        """
+        Runs the process.
+        This method is called by the child process to do the actual logging.
+        """
+        self._init()
         rospy.logdebug("ACTIVE: %s" % self.name)
-        # run the thread
+        # Process the messages
         while not self.is_quit():
-            self.dequeue()
+            self._dequeue()
 
         # we must make sure to clear the queue before exiting,
         # or the parent thread might deadlock otherwise
@@ -170,56 +242,53 @@ class LoggerProcess(MongoDBLogger):
             t = self.queue.get_nowait()
         rospy.logdebug("STOPPED: %s" % self.name)
 
-    def sanitize_value(self, v):
+    def _sanitize_value(self, v):
         if isinstance(v, rospy.Message):
-            return self.message_to_dict(v)
+            return self._message_to_dict(v)
         elif isinstance(v, genpy.rostime.Time):
             t = datetime.utcfromtimestamp(v.secs)
             return t + timedelta(microseconds=v.nsecs / 1000.)
         elif isinstance(v, genpy.rostime.Duration):
             return v.secs + v.nsecs / 1000000000.
         elif isinstance(v, list):
-            return [self.sanitize_value(t) for t in v]
+            return [self._sanitize_value(t) for t in v]
         else:
             return v
 
-    def message_to_dict(self, val):
+    def _message_to_dict(self, val):
         d = {}
         for f in val.__slots__:
-            d[f] = self.sanitize_value(getattr(val, f))
+            d[f] = self._sanitize_value(getattr(val, f))
         return d
 
     def qsize(self):
         return self.queue.qsize()
 
-    def enqueue(self, data, topic, current_time=None):
+    def _enqueue(self, data, topic, current_time=None):
         if not self.is_quit():
             if self.queue.full():
                 try:
                     self.queue.get_nowait()
-                    self.drop_counter.increment()
                     self.worker_drop_counter.increment()
                 except Empty:
                     pass
             self.queue.put((topic, data, rospy.get_time()))
-            self.in_counter.increment()
             self.worker_in_counter.increment()
 
-    def dequeue(self):
+    def _dequeue(self):
         try:
             t = self.queue.get(True)
         except IOError:
             self.quit.value = 1
             return
         if isinstance(t, tuple):
-            self.out_counter.increment()
             self.worker_out_counter.increment()
             topic = t[0]
             msg = t[1]
             ctime = t[2]
 
             if isinstance(msg, rospy.Message):
-                doc = self.message_to_dict(msg)
+                doc = self._message_to_dict(msg)
                 doc["__recorded"] = ctime or datetime.now()
                 doc["__topic"] = topic
                 try:
@@ -231,11 +300,36 @@ class LoggerProcess(MongoDBLogger):
 
 
 class CPPLogger(MongoDBLogger):
-    def __init__(self, idnum, topic, collname, in_counter_value, out_counter_value,
-                 drop_counter_value, queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
-                 cpp_logger, additional_parameters):
-        super(CPPLogger, self).__init__(idnum, topic, collname, in_counter_value, out_counter_value, drop_counter_value,
-                               queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
+    """
+    This class implements a base class for spezialized loggers using other languages (like C++).
+    """
+
+    def __init__(self, idnum, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix, cpp_logger,
+                 additional_parameters):
+        """
+        Creates a new instance of the CPPLogger.
+        :param id_: The ID of this logger process
+        :type id_: int
+        :param topic: The topic to log messages from
+        :type topic: basestring
+        :param collname: The name of the collection in the MongoDB to log messages to.
+        :type collnae: basestring
+        :param mongodb_host:The hostname or ip of the host running the MongoDB
+        :type mongodb_host: basestring
+        :param mongodb_port: The port on which the MongoDB is running on
+        :type mongodb_port: int
+        :param mongodb_name: The name of the databse to use for logging
+        :type mongodb_name: basestring
+        :param nodename_prefix: An optional prefix to use for the name of this Process
+        :type nodename_prefix: basestring
+        :param cpp_logger: The path to the executable to use for the actual logging
+        :type cpp_logger: basestring
+        :param additional_parameters: Optional additional parameters to give to the logger
+        :type additional_parameters: [basestring]
+        :return: A new CPPLogger instance
+        :rtype: CPPLogger
+        """
+        super(CPPLogger, self).__init__(idnum, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
         self.worker_out_counter = Counter()
         self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
@@ -263,9 +357,6 @@ class CPPLogger(MongoDBLogger):
             if line == "":
                 continue
             arr = string.split(line, ":")
-            self.in_counter.increment(int(arr[0]))
-            self.out_counter.increment(int(arr[1]))
-            self.drop_counter.increment(int(arr[2]))
             self.qsize = int(arr[3])
 
             self.worker_in_counter.increment(int(arr[0]))
@@ -279,6 +370,10 @@ class CPPLogger(MongoDBLogger):
 
 
 class MongoWriter(object):
+    """
+    This class acts as the root node for all loggers.
+    If initializes the different loggers for each topic given and writes stats them.
+    """
 
     __special_logger = {}
 
@@ -379,18 +474,14 @@ class MongoWriter(object):
         if not self.no_specific and msg_class in self.__special_logger:
             loggerClass = self.__special_logger[msg_class]
             try:
-                logger = loggerClass(idnum, topic, collname,
-                                self.in_counter.count, self.out_counter.count,
-                                self.drop_counter.count, QUEUE_MAXSIZE,
-                                self.mongodb_host, self.mongodb_port, self.mongodb_name,
-                                self.nodename_prefix)
+                logger = loggerClass(idnum, topic, collname, self.mongodb_host, self.mongodb_port, self.mongodb_name,
+                                     self.nodename_prefix)
             except Exception, e:
                 rospy.logerr(e.message)
 
         if logger is None:
-            logger = LoggerProcess(idnum, topic, collname, self.in_counter.count, self.out_counter.count,
-                                   self.drop_counter.count, QUEUE_MAXSIZE, self.mongodb_host, self.mongodb_port,
-                                   self.mongodb_name, self.nodename_prefix)
+            logger = TopicLogger(idnum, topic, collname, self.mongodb_host, self.mongodb_port, self.mongodb_name,
+                                 self.nodename_prefix)
 
         if self.graph_topics:
             self.assert_worker_rrd(collname)
@@ -632,7 +723,7 @@ class MongoWriter(object):
         if self.graph_daemon:
             self.graph_sockfile = mktemp(prefix="rrd_", suffix=".sock")
             self.graph_pidfile = mktemp(prefix="rrd_", suffix=".pid")
-            ("Starting rrdcached -l unix:%s -p %s -b %s -g" %
+            rospy.loginfo("Starting rrdcached -l unix:%s -p %s -b %s -g" %
                   (self.graph_sockfile, self.graph_pidfile, self.graph_dir))
             self.graph_process = subprocess.Popen(["/usr/bin/rrdcached",
                                                    "-l", "unix:%s" % self.graph_sockfile,
