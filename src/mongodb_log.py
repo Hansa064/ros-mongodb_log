@@ -386,7 +386,7 @@ class MongoWriter(object):
 
         # Register specialized loggers
         from special_loggers import register_special_loggers
-        register_special_loggers(self)
+        register_special_loggers()
 
         self.graph_dir = graph_dir
         self.graph_topics = graph_topics
@@ -403,9 +403,6 @@ class MongoWriter(object):
         self.quit = False
         self.topics = set()
         self.sep = "\n"  # '\033[2J\033[;H'
-        self.in_counter = Counter()
-        self.out_counter = Counter()
-        self.drop_counter = Counter()
         self.workers = {}
         self.stats_looptime = stats_looptime
 
@@ -744,7 +741,13 @@ class MongoWriter(object):
         # values for this, but we do care for high performance processing
         qsize = 0
         time_started = datetime.now()
+        in_counter = 0
+        out_counter = 0
+        drop_counter = 0
         for _, w in self.workers.items():
+            in_counter += w.worker_in_counter.count.value
+            out_counter += w.worker_out_counter.count.value
+            drop_counter += w.worker_drop_counter.count.value
             wqsize = w.queue.qsize()
             qsize += wqsize
             if wqsize > QUEUE_MAXSIZE / 2:
@@ -760,8 +763,7 @@ class MongoWriter(object):
         rrdtool.update(["%s/logstats.rrd" % self.graph_dir]
                        + (self.graph_daemon and self.graph_daemon_args or []) +
                        ["N:%d:%d:%d:%d" %
-                        (qsize, self.in_counter.count.value, self.out_counter.count.value,
-                         self.drop_counter.count.value)])
+                        (qsize, in_counter, out_counter, drop_counter)])
 
         rrdtool.update(["%s/logmemory.rrd" % self.graph_dir]
                        + (self.graph_daemon and self.graph_daemon_args or []) +
@@ -769,7 +771,7 @@ class MongoWriter(object):
 
         time_elapsed = datetime.now() - time_started
         rospy.logdebug("Updated graphs, total queue size %d, dropped %d, took %s" %
-                       (qsize, self.drop_counter.count.value, time_elapsed))
+                       (qsize, drop_counter, time_elapsed))
 
 
 def main(argv):

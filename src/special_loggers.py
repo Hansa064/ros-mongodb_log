@@ -1,5 +1,5 @@
 from roslib.packages import find_node
-from mongodb_log import CPPLogger, PACKAGE_NAME
+from mongodb_log import CPPLogger, PACKAGE_NAME, register_logger
 import rospy
 
 
@@ -7,8 +7,7 @@ __author__ = 'suturo'
 
 
 class TFLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_tf")
         # Log only when the preceeding entry of that
         # transformation had at least 0.100 vectorial and radial
@@ -18,173 +17,153 @@ class TFLogger(CPPLogger):
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_tf, falling back to generic logger (did not build package?)")
 
-        super(TFLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value,
-                                       queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
+        super(TFLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
                                        node_path[0], additional_parameters)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from tf.msg import tfMessage
-            writer.registerLogger(tfMessage, cls)
+            register_logger(tfMessage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type tfMessage")
         try:
             from tf2_msgs.msg import TFMessage
-            writer.registerLogger(TFMessage, cls)
+            register_logger(TFMessage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type TFMessage")
 
 
 class PointCloudLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
 
         node_path = find_node(PACKAGE_NAME, "mongodb_log_pcl")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_pcl, falling back to generic logger (did not build package?)")
-        super(PointCloudLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                               drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
-                                               mongodb_name, nodename_prefix, node_path[0], None)
+        super(PointCloudLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                               nodename_prefix, node_path[0], None)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from sensor_msgs.msg import PointCloud
-            writer.registerLogger(PointCloud, cls)
+            register_logger(PointCloud, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type PointCloud")
 
 
 class ImageLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
 
         node_path = find_node(PACKAGE_NAME, "mongodb_log_img")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_img, falling back to generic logger (did not build package?)")
-        super(ImageLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                          drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
-                                          mongodb_name, nodename_prefix, node_path[0], None)
+        super(ImageLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
+                                          node_path[0], None)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from sensor_msgs.msg import Image
-            writer.registerLogger(Image, cls)
+            register_logger(Image, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type Image")
 
 
 class CompressedImageLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_cimg")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_cimg, falling back to generic logger (did not build package?)")
-        super(CompressedImageLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                          drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
-                                          mongodb_name, nodename_prefix, node_path[0], None)
+        super(CompressedImageLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                                    nodename_prefix, node_path[0], None)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from sensor_msgs.msg import CompressedImage
-            writer.registerLogger(CompressedImage, cls)
+            register_logger(CompressedImage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type CompressedImage")
 
 
 class DesignatorRequestLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator-request"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorRequestLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                                      drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
+        super(DesignatorRequestLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
                                                       mongodb_name, nodename_prefix, node_path[0], additional_parameters)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from designator_integration_msgs.msg import DesignatorRequest
-            writer.registerLogger(DesignatorRequest, cls)
+            register_logger(DesignatorRequest, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type DesignatorRequest")
 
 
 class DesignatorResponseLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator-response"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorResponseLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                                      drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
+        super(DesignatorResponseLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
                                                       mongodb_name, nodename_prefix, node_path[0], additional_parameters)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from designator_integration_msgs.msg import DesignatorResponse
-            writer.registerLogger(DesignatorResponse, cls)
+            register_logger(DesignatorResponse, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type DesignatorResponse")
 
 
 class DesignatorLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                                      drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
+        super(DesignatorLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
                                                       mongodb_name, nodename_prefix, node_path[0], additional_parameters)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from designator_integration_msgs.msg import Designator
-            writer.registerLogger(Designator, cls)
+            register_logger(Designator, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type Designator")
 
 
 class TriangleMeshLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-
+    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_trimesh")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_trimesh, falling back to generic logger (did not build package?)")
-        super(TriangleMeshLogger, self).__init__(id_, topic, collname, in_counter_value, out_counter_value,
-                                                 drop_counter_value, queue_maxsize, mongodb_host, mongodb_port,
+        super(TriangleMeshLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
                                                  mongodb_name, nodename_prefix, node_path[0], None)
 
     @classmethod
-    def register(cls, writer):
+    def register(cls):
         try:
             from triangle_mesh_msgs.msg import TriangleMesh
-            writer.registerLogger(TriangleMesh, cls)
+            register_logger(TriangleMesh, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type TriangleMesh")
 
 
-def register_special_loggers(writer):
-    TFLogger.register(writer)
-    PointCloudLogger.register(writer)
-    ImageLogger.register(writer)
-    CompressedImageLogger.register(writer)
-    DesignatorRequestLogger.register(writer)
-    DesignatorResponseLogger.register(writer)
-    DesignatorLogger.register(writer)
-    TriangleMeshLogger.register(writer)
+def register_special_loggers():
+    TFLogger.register()
+    PointCloudLogger.register()
+    ImageLogger.register()
+    CompressedImageLogger.register()
+    DesignatorRequestLogger.register()
+    DesignatorResponseLogger.register()
+    DesignatorLogger.register()
+    TriangleMeshLogger.register()
