@@ -487,7 +487,7 @@ class MongoWriter(object):
             started = datetime.now()
 
             if self.graph_daemon and self.graph_process.poll() != None:
-                print("WARNING: rrdcached died, falling back to non-cached version. Please investigate.")
+                rospy.logwarn("rrdcached died, falling back to non-cached version. Please investigate.")
                 self.graph_daemon = False
 
             self.update_rrd()
