@@ -27,7 +27,6 @@ from __future__ import division, with_statement
 PACKAGE_NAME = 'mongodb_log'
 NODE_NAME = 'mongodb_log'
 NODE_NAME_TEMPLATE = '%smongodb_log'
-WORKER_NODE_NAME = "%smongodb_log_worker_%d_%s"
 QUEUE_MAXSIZE = 100
 
 import roslib
@@ -41,20 +40,13 @@ import string
 import socket
 import subprocess
 from threading import Thread, Timer
-from multiprocessing import Process, Lock, Condition, Queue, Value, current_process
+from multiprocessing import Process, Lock, Queue, Value, current_process
 from Queue import Empty
 from optparse import OptionParser
 from tempfile import mktemp
 from datetime import datetime, timedelta
 from time import sleep
 from random import randint
-from tf.msg import tfMessage
-from tf2_msgs.msg import TFMessage
-from sensor_msgs.msg import PointCloud, CompressedImage, Image
-from roslib.packages import find_node
-from designator_integration_msgs.msg import DesignatorRequest
-from designator_integration_msgs.msg import DesignatorResponse
-from designator_integration_msgs.msg import Designator
 
 
 use_setproctitle = True
@@ -72,7 +64,6 @@ from pymongo.errors import InvalidDocument, InvalidStringData
 import rrdtool
 
 BACKLOG_WARN_LIMIT = 100
-STATS_LOOPTIME = 0
 STATS_GRAPHTIME = 60
 
 
@@ -90,51 +81,56 @@ class Counter(object):
             return self.count.value
 
 
-class Barrier(object):
-    def __init__(self, num_threads):
-        self.num_threads = num_threads
-        self.threads_left = Value('i', num_threads, lock=True)
-        self.mutex = Lock()
-        self.waitcond = Condition(self.mutex)
-
-    def wait(self):
-        self.mutex.acquire()
-        self.threads_left.value -= 1
-        if self.threads_left.value == 0:
-            self.threads_left.value = self.num_threads
-            self.waitcond.notify_all()
-            self.mutex.release()
-        else:
-            self.waitcond.wait()
-            self.mutex.release()
+def register_logger(message, logger):
+    MongoWriter.registerLogger(message, logger)
 
 
-class WorkerProcess(Process):
-    def __init__(self, idnum, topic, collname, in_counter_value, out_counter_value,
-                 drop_counter_value, queue_maxsize,
+class MongoDBLogger(Process):
+
+    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value, queue_maxsize,
                  mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
-        super(WorkerProcess, self).__init__(name="WorkerProcess-%4d-%s" % (idnum, topic))
-        self.id = idnum
+        super(MongoDBLogger, self).__init__(name="%sMongoDBLogger-%d-%s" % (nodename_prefix, id_, topic))
+        self.id = id_
         self.topic = topic
         self.collname = collname
         self.queue = Queue(queue_maxsize)
         self.out_counter = Counter(out_counter_value)
         self.in_counter = Counter(in_counter_value)
         self.drop_counter = Counter(drop_counter_value)
-        self.worker_out_counter = Counter()
-        self.worker_in_counter = Counter()
-        self.worker_drop_counter = Counter()
         self.mongodb_host = mongodb_host
         self.mongodb_port = mongodb_port
         self.mongodb_name = mongodb_name
         self.nodename_prefix = nodename_prefix
+        self.nodename = "%sMongoDBLogger_%d%s" % (nodename_prefix, id_, topic.replace("/", "_"))
         self.quit = Value('i', 0)
+
+    def shutdown(self):
+        if not self.is_quit():
+            self.quit.value = 1
+            self.queue.put("shutdown")
+        self.join()
+
+    def is_quit(self):
+        return self.quit.value == 1
 
     @property
     def process(self):
         return self
 
+
+class LoggerProcess(MongoDBLogger):
+    def __init__(self, id_, topic, collname, in_counter_value, out_counter_value,
+                 drop_counter_value, queue_maxsize,
+                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+        MongoDBLogger.__init__(self, id_, topic, collname, in_counter_value, out_counter_value, drop_counter_value,
+                               queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
+        self.worker_out_counter = Counter()
+        self.worker_in_counter = Counter()
+        self.worker_drop_counter = Counter()
+
     def init(self):
+        rospy.logdebug("Inializing node %s" % self.nodename)
+        rospy.init_node(self.nodename, anonymous=False)
         if use_setproctitle:
             setproctitle("mongodb_log %s" % self.topic)
 
@@ -146,24 +142,22 @@ class WorkerProcess(Process):
         self.collection.count()
 
         self.queue.cancel_join_thread()
-        rospy.init_node(WORKER_NODE_NAME % (self.nodename_prefix, self.id, self.collname), anonymous=False)
-
         self.subscriber = None
         while not self.subscriber:
             try:
                 msg_class, real_topic, msg_eval = rostopic.get_topic_class(self.topic, blocking=True)
                 self.subscriber = rospy.Subscriber(real_topic, msg_class, self.enqueue, self.topic)
             except rostopic.ROSTopicIOException:
-                print("FAILED to subscribe, will keep trying %s" % self.name)
+                rospy.logwarn("FAILED to subscribe, will keep trying %s" % self.name)
                 time.sleep(randint(1, 10))
             except rospy.ROSInitException:
-                print("FAILED to initialize, will keep trying %s" % self.name)
+                rospy.logwarn("FAILED to initialize, will keep trying %s" % self.name)
                 time.sleep(randint(1, 10))
                 self.subscriber = None
 
     def run(self):
         self.init()
-        print("ACTIVE: %s" % self.name)
+        rospy.logdebug("ACTIVE: %s" % self.name)
         # run the thread
         while not self.is_quit():
             self.dequeue()
@@ -174,19 +168,7 @@ class WorkerProcess(Process):
         self.subscriber = None
         while not self.queue.empty():
             t = self.queue.get_nowait()
-        print("STOPPED: %s" % self.name)
-
-    def is_quit(self):
-        return self.quit.value == 1
-
-    def shutdown(self):
-        if not self.is_quit():
-            self.quit.value = 1
-            self.queue.put("shutdown")
-            while not self.queue.empty():
-                sleep(0.1)
-        self.join()
-        self.terminate()
+        rospy.logdebug("STOPPED: %s" % self.name)
 
     def sanitize_value(self, v):
         if isinstance(v, rospy.Message):
@@ -243,49 +225,41 @@ class WorkerProcess(Process):
                 try:
                     self.collection.insert(doc)
                 except (InvalidStringData, InvalidDocument), e:
-                    print("%s %s@%s:\n%s" % (e.__class__.__name__, current_process().name, topic, e))
+                    rospy.logerr("%s %s@%s:\n%s" % (e.__class__.__name__, current_process().name, topic, e))
         else:
             self.quit.value = 1
 
 
-class SubprocessWorker(Process):
+class CPPLogger(MongoDBLogger):
     def __init__(self, idnum, topic, collname, in_counter_value, out_counter_value,
-                 drop_counter_value, queue_maxsize,
-                 mongodb_host, mongodb_port, mongodb_name, nodename_prefix, cpp_logger, additional_parameters=None):
-
-        super(SubprocessWorker, self).__init__(name="SubprocessWorker-%4d-%s" % (idnum, topic))
-        self.id = idnum
-        self.topic = topic
-        self.collname = collname
-        self.queue = Queue(queue_maxsize)
-        self.out_counter = Counter(out_counter_value)
-        self.in_counter = Counter(in_counter_value)
-        self.drop_counter = Counter(drop_counter_value)
+                 drop_counter_value, queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
+                 cpp_logger, additional_parameters):
+        super(CPPLogger, self).__init__(idnum, topic, collname, in_counter_value, out_counter_value, drop_counter_value,
+                               queue_maxsize, mongodb_host, mongodb_port, mongodb_name, nodename_prefix)
         self.worker_out_counter = Counter()
         self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
-        self.mongodb_host = mongodb_host
-        self.mongodb_port = mongodb_port
-        self.mongodb_name = mongodb_name
-        self.nodename_prefix = nodename_prefix
-        self.quit = False
         self.qsize = 0
+        self.additional_parameters = additional_parameters if additional_parameters is not None else []
+        self.cpp_logger = cpp_logger
+        self.__process = None
 
-        mongodb_host_port = "%s:%d" % (mongodb_host, mongodb_port)
-        collection = "%s.%s" % (mongodb_name, collname)
-        nodename = WORKER_NODE_NAME % (self.nodename_prefix, self.id, self.collname)
-
-        additional_parameters = additional_parameters if additional_parameters is not None else []
-        self.process = subprocess.Popen([cpp_logger, "-t", topic, "-n", nodename,
-                                         "-m", mongodb_host_port, "-c", collection] + additional_parameters,
-                                        stdout=subprocess.PIPE)
+    @property
+    def process(self):
+        return self.__process
 
     def qsize(self):
         return self.qsize
 
     def run(self):
-        while not self.quit:
-            line = self.process.stdout.readline().rstrip()
+        mongodb_host_port = "%s:%d" % (self.mongodb_host, self.mongodb_port)
+        collection = "%s.%s" % (self.mongodb_name, self.collname)
+
+        self.__process = subprocess.Popen([self.cpp_logger, "-t", self.topic, "-n", self.nodename,
+                                           "-m", mongodb_host_port, "-c", collection] + self.additional_parameters,
+                                        stdout=subprocess.PIPE)
+        while not self.is_quit():
+            line = self.__process.stdout.readline().rstrip()
             if line == "":
                 continue
             arr = string.split(line, ":")
@@ -299,18 +273,26 @@ class SubprocessWorker(Process):
             self.worker_drop_counter.increment(int(arr[2]))
 
     def shutdown(self):
-        self.quit = True
-        self.process.kill()
-        self.process.wait()
+        super(CPPLogger, self).shutdown()
+        self.__process.kill()
+        self.__process.wait()
 
 
 class MongoWriter(object):
+
+    __special_logger = {}
+
     def __init__(self, topics=None, graph_topics=False,
                  graph_dir=".", graph_clear=False, graph_daemon=False,
                  all_topics=False, all_topics_interval=5,
                  exclude_topics=None,
                  mongodb_host=None, mongodb_port=None, mongodb_name="roslog",
-                 no_specific=False, nodename_prefix=""):
+                 no_specific=False, nodename_prefix="", stats_looptime=0):
+
+        # Register specialized loggers
+        from special_loggers import register_special_loggers
+        register_special_loggers(self)
+
         self.graph_dir = graph_dir
         self.graph_topics = graph_topics
         self.graph_clear = graph_clear
@@ -330,6 +312,7 @@ class MongoWriter(object):
         self.out_counter = Counter()
         self.drop_counter = Counter()
         self.workers = {}
+        self.stats_looptime = stats_looptime
 
         if self.graph_dir == ".":
             self.graph_dir = os.getcwd()
@@ -348,10 +331,14 @@ class MongoWriter(object):
 
         self.subscribe_topics(set(topics if topics is not None else []))
         if self.all_topics:
-            print("All topics")
+            rospy.logdebug("All topics")
             self.ros_master = rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % self.nodename_prefix)
             self.update_topics(restart=False)
         self.start_all_topics_timer()
+
+    @classmethod
+    def registerLogger(cls, msgClass, logger_class):
+        cls.__special_logger[msgClass] = logger_class
 
     def subscribe_topics(self, topics):
         for topic in topics:
@@ -366,7 +353,7 @@ class MongoWriter(object):
             do_continue = False
             for tre in self.exclude_regex:
                 if tre.match(topic):
-                    print("*** IGNORING topic %s due to exclusion rule" % topic)
+                    rospy.loginfo("*** IGNORING topic %s due to exclusion rule" % topic)
                     do_continue = True
                     self.exclude_already.append(topic)
                     break
@@ -379,98 +366,44 @@ class MongoWriter(object):
             # possibility of name classes (hence the check)
             collname = topic.replace("/", "_")[1:]
             if collname in self.workers.keys():
-                print("Two converted topic names clash: %s, ignoring topic %s"
+                rospy.logwarn("Two converted topic names clash: %s, ignoring topic %s"
                       % (collname, topic))
             else:
-                print("Adding topic %s" % topic)
+                rospy.loginfo("Adding topic %s" % topic)
                 self.workers[collname] = self.create_worker(len(self.workers), topic, collname)
                 self.topics |= {topic}
 
     def create_worker(self, idnum, topic, collname):
-        msg_class, real_topic, msg_eval = rostopic.get_topic_class(topic, blocking=True)
+        msg_class, _, _ = rostopic.get_topic_class(topic, blocking=True)
+        logger = None
+        if not self.no_specific and msg_class in self.__special_logger:
+            loggerClass = self.__special_logger[msg_class]
+            try:
+                logger = loggerClass(idnum, topic, collname,
+                                self.in_counter.count, self.out_counter.count,
+                                self.drop_counter.count, QUEUE_MAXSIZE,
+                                self.mongodb_host, self.mongodb_port, self.mongodb_name,
+                                self.nodename_prefix)
+            except Exception, e:
+                rospy.logerr(e.message)
 
-        w = None
-        node_path = None
-        additional_parameters = []
-
-        if not self.no_specific and (msg_class == tfMessage) or (msg_class == TFMessage):
-            print("DETECTED transform topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_tf")
-
-            # Log only when the preceeding entry of that
-            # transformation had at least 0.100 vectorial and radial
-            # distance to its predecessor transformation, but at least
-            # every second.
-            additional_parameters = ["-k" "0.100" "-l" "0.100" "-g" "1"]
-            if not node_path:
-                print("FAILED to detect mongodb_log_tf, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == PointCloud:
-            print("DETECTED point cloud topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_pcl")
-            if not node_path:
-                print("FAILED to detect mongodb_log_pcl, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == Image:
-            print("DETECTED compressed image topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_img")
-            if not node_path:
-                print("FAILED to detect mongodb_log_img, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == CompressedImage:
-            print("DETECTED compressed image topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_cimg")
-            if not node_path:
-                print("FAILED to detect mongodb_log_cimg, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == DesignatorRequest:
-            print("DETECTED designator request topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
-            additional_parameters = ["-d" "designator-request"]
-            if not node_path:
-                print("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == DesignatorResponse:
-            print("DETECTED designator response topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
-            additional_parameters = ["-d" "designator-response"]
-            if not node_path:
-                print("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        elif not self.no_specific and msg_class == Designator:
-            print("DETECTED designator topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
-            additional_parameters = ["-d" "designator"]
-            if not node_path:
-                print("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        """
-        elif msg_class == TriangleMesh:
-            print("DETECTED triangle mesh topic %s, using fast C++ logger" % topic)
-            node_path = find_node(PACKAGE_NAME, "mongodb_log_trimesh")
-            if not node_path:
-                print("FAILED to detect mongodb_log_trimesh, falling back to generic logger (did not build package?)")
-        """
-
-        if node_path:
-            w = SubprocessWorker(idnum, topic, collname,
-                                 self.in_counter.count, self.out_counter.count,
-                                 self.drop_counter.count, QUEUE_MAXSIZE,
-                                 self.mongodb_host, self.mongodb_port, self.mongodb_name,
-                                 self.nodename_prefix, node_path[0], additional_parameters)
-
-        if not w:
-            print("GENERIC Python logger used for topic %s" % topic)
-            w = WorkerProcess(idnum, topic, collname,
-                              self.in_counter.count, self.out_counter.count,
-                              self.drop_counter.count, QUEUE_MAXSIZE,
-                              self.mongodb_host, self.mongodb_port, self.mongodb_name,
-                              self.nodename_prefix)
+        if logger is None:
+            logger = LoggerProcess(idnum, topic, collname, self.in_counter.count, self.out_counter.count,
+                                   self.drop_counter.count, QUEUE_MAXSIZE, self.mongodb_host, self.mongodb_port,
+                                   self.mongodb_name, self.nodename_prefix)
 
         if self.graph_topics:
             self.assert_worker_rrd(collname)
-        w.start()
-        return w
+        return logger
 
     def run(self):
-        looping_threshold = timedelta(0, STATS_LOOPTIME, 0)
+        for worker in self.workers.itervalues():
+            worker.start()
 
         self.graph_thread = Thread(name="RRDGrapherThread", target=self.graph_rrd_thread)
         self.graph_thread.daemon = True
         self.graph_thread.start()
+        looping_threshold = timedelta(0, self.stats_looptime, 0)
 
         while not rospy.is_shutdown() and not self.quit:
             started = datetime.now()
@@ -485,7 +418,7 @@ class MongoWriter(object):
             # varying run-times and interrupted sleeps into account
             td = datetime.now() - started
             while not rospy.is_shutdown() and not self.quit and td < looping_threshold:
-                sleeptime = STATS_LOOPTIME - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10 ** 6) / 10 ** 6
+                sleeptime = self.stats_looptime - (td.microseconds + (td.seconds + td.days * 24 * 3600) * 10 ** 6) / 10 ** 6
                 if sleeptime > 0:
                     sleep(sleeptime)
                 td = datetime.now() - started
@@ -544,11 +477,12 @@ class MongoWriter(object):
 
     def get_memory_usage(self):
         size, rss, stack = 0, 0, 0
-        for _, w in self.workers.items():
-            pmem = self.get_memory_usage_for_pid(w.process.pid)
-            size += pmem[0]
-            rss += pmem[1]
-            stack += pmem[2]
+        for w in self.workers.itervalues():
+            if w.process is not None:
+                pmem = self.get_memory_usage_for_pid(w.process.pid)
+                size += pmem[0]
+                rss += pmem[1]
+                stack += pmem[2]
         return (size, rss, stack)
 
     def assert_rrd(self, file, *data_sources):
@@ -680,7 +614,7 @@ class MongoWriter(object):
                        "GPRINT:rss:AVERAGE:Average\\:%8.2lf %s",
                        "GPRINT:rss:MAX:Maximum\\:%8.2lf %s\\n"])
         time_elapsed = datetime.now() - time_started
-        print("Generated graphs, took %s" % time_elapsed)
+        rospy.logdebug("Generated graphs, took %s" % time_elapsed)
 
     def init_rrd(self):
         self.assert_rrd("%s/logstats.rrd" % self.graph_dir,
@@ -698,7 +632,7 @@ class MongoWriter(object):
         if self.graph_daemon:
             self.graph_sockfile = mktemp(prefix="rrd_", suffix=".sock")
             self.graph_pidfile = mktemp(prefix="rrd_", suffix=".pid")
-            print("Starting rrdcached -l unix:%s -p %s -b %s -g" %
+            ("Starting rrdcached -l unix:%s -p %s -b %s -g" %
                   (self.graph_sockfile, self.graph_pidfile, self.graph_dir))
             self.graph_process = subprocess.Popen(["/usr/bin/rrdcached",
                                                    "-l", "unix:%s" % self.graph_sockfile,
@@ -723,7 +657,7 @@ class MongoWriter(object):
             wqsize = w.queue.qsize()
             qsize += wqsize
             if wqsize > QUEUE_MAXSIZE / 2:
-                print("Excessive queue size %6d: %s" % (wqsize, w.name))
+                rospy.logwarn("Excessive queue size %6d: %s" % (wqsize, w.name))
 
             if self.graph_topics:
                 rrdtool.update(["%s/%s.rrd" % (self.graph_dir, w.collname)]
@@ -743,8 +677,8 @@ class MongoWriter(object):
                        ["N:%d:%d:%d" % self.get_memory_usage()])
 
         time_elapsed = datetime.now() - time_started
-        print("Updated graphs, total queue size %d, dropped %d, took %s" %
-              (qsize, self.drop_counter.count.value, time_elapsed))
+        rospy.logdebug("Updated graphs, total queue size %d, dropped %d, took %s" %
+                       (qsize, self.drop_counter.count.value, time_elapsed))
 
 
 def main(argv):
@@ -783,7 +717,8 @@ def main(argv):
                       help="Use rrddaemon.")
     parser.add_option("--no-specific", dest="no_specific", default=False,
                       action="store_true", help="Disable specific loggers")
-
+    parser.add_option("--stats-looptime", dest="stats_looptime", default=0,
+                      type=int, help="Record stats every x seconds")
     (options, args) = parser.parse_args()
 
     if not options.all_topics and len(args) == 0:
@@ -793,7 +728,7 @@ def main(argv):
     try:
         rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % options.nodename_prefix).getPid()
     except socket.error:
-        print("Failed to communicate with master")
+        rospy.logerr("Failed to communicate with master")
 
     mongowriter = MongoWriter(topics=rospy.myargv(args), graph_topics=options.graph_topics,
                               graph_dir=options.graph_dir,
@@ -806,10 +741,12 @@ def main(argv):
                               mongodb_port=options.mongodb_port,
                               mongodb_name=options.mongodb_name,
                               no_specific=options.no_specific,
-                              nodename_prefix=options.nodename_prefix)
+                              nodename_prefix=options.nodename_prefix,
+                              stats_looptime=options.stats_looptime)
 
     mongowriter.run()
     mongowriter.shutdown()
+
 
 if __name__ == "__main__":
     main(sys.argv)
