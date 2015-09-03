@@ -23,6 +23,7 @@
 # make sure we aren't using floor division
 from __future__ import division, with_statement
 from argparse import ArgumentParser
+import logger_registry
 
 BACKLOG_WARN_LIMIT = 100
 STATS_GRAPHTIME = 60
@@ -34,28 +35,21 @@ QUEUE_MAXSIZE = 100
 
 import roslib
 roslib.load_manifest(PACKAGE_NAME)
-import os
-import re
 import sys
 import time
 import string
 import socket
 import abc
 import subprocess
-from threading import Thread, Timer
-from multiprocessing import Process, Lock, Queue, Value, current_process
+from multiprocessing import Process, Lock, Queue, current_process
 from Queue import Empty
-from optparse import OptionParser
-from tempfile import mktemp
 from datetime import datetime, timedelta
-from time import sleep
 import genpy
 import rospy
 import rosgraph.masterapi
 import rostopic
 from pymongo import Connection, SLOW_ONLY
 from pymongo.errors import InvalidDocument, InvalidStringData
-import rrdtool
 from random import randint
 
 
@@ -71,24 +65,6 @@ class Counter(object):
     def value(self):
         with self.mutex:
             return self.__value
-
-
-SPECIAL_LOGGERS = {}
-
-
-def register_logger(message, logger):
-    """
-    Registers a new specialized logger for the given message type.
-    Whenever the Logger detects a topic of the given message type, it will create a new instance of the given logger
-    class and use this one for the logging.
-
-    :param message: The message type to use the specialized logger for.
-    :type message: object
-    :param logger: The logger to use
-    :type logger: MongoDBLogger
-    """
-    global SPECIAL_LOGGERS
-    SPECIAL_LOGGERS[message] = logger
 
 
 class MongoDBLogger(object):
@@ -359,16 +335,11 @@ class CPPLogger(MongoDBLogger):
 
 def create_worker(name, topic, mongodb_host, mongodb_port, mongodb_name, collname, no_specific=False):
         msg_class, _, _ = rostopic.get_topic_class(topic, blocking=True)
-        logger = None
-        if not no_specific and msg_class in SPECIAL_LOGGERS:
-            loggerClass = SPECIAL_LOGGERS[msg_class]
-            try:
-                logger = loggerClass(name, topic, collname, mongodb_host, mongodb_port, mongodb_name)
-            except Exception, e:
-                rospy.logerr(e.message)
-        if logger is None:
-            logger = TopicLogger(name, topic, collname, mongodb_host, mongodb_port, mongodb_name)
-        return logger
+        if no_specific:
+            loggerClass = TopicLogger
+        else:
+            loggerClass = logger_registry.get_logger(msg_class, TopicLogger)
+        return loggerClass(name, topic, collname, mongodb_host, mongodb_port, mongodb_name)
 
 
 def main(argv):
@@ -389,7 +360,7 @@ def main(argv):
                         action="store_true", help="Disable specific loggers")
     parser.add_argument("topic", metavar="T", type=str, nargs=1,
                         help="The topic to subscribe to")
-    args = parser.parse_args(rospy.myargv()[1:])
+    args = parser.parse_args(argv)
 
     # Initialize the rospy node
     topic = args.topic[0]
@@ -405,10 +376,10 @@ def main(argv):
     except socket.error:
         rospy.logerr("Failed to communicate with master")
 
-
-    # Register specialized loggers
-    from special_loggers import register_special_loggers
-    register_special_loggers()
+    try:
+        import special_loggers
+    except:
+        pass
 
     # Create the worker
     logger = create_worker(name, topic, args.mongodb_host, args.mongodb_port,
@@ -423,4 +394,4 @@ def main(argv):
         logger.shutdown()
 
 if __name__ == "__main__":
-    main(sys.argv)
+    main(rospy.myargv()[1:])

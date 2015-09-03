@@ -1,9 +1,10 @@
 from roslib.packages import find_node
-from mongodb_log import CPPLogger, PACKAGE_NAME, register_logger
+from mongodb_log import CPPLogger, PACKAGE_NAME
+import logger_registry
 import rospy
 
 
-__author__ = 'suturo'
+__author__ = 'Torben Hansing'
 
 
 class TFLogger(CPPLogger):
@@ -24,12 +25,12 @@ class TFLogger(CPPLogger):
     def register(cls):
         try:
             from tf.msg import tfMessage
-            register_logger(tfMessage, cls)
+            logger_registry.register_logger(tfMessage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type tfMessage")
         try:
             from tf2_msgs.msg import TFMessage
-            register_logger(TFMessage, cls)
+            logger_registry.register_logger(TFMessage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type TFMessage")
 
@@ -47,7 +48,7 @@ class PointCloudLogger(CPPLogger):
     def register(cls):
         try:
             from sensor_msgs.msg import PointCloud
-            register_logger(PointCloud, cls)
+            logger_registry.register_logger(PointCloud, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type PointCloud")
 
@@ -65,7 +66,7 @@ class ImageLogger(CPPLogger):
     def register(cls):
         try:
             from sensor_msgs.msg import Image
-            register_logger(Image, cls)
+            logger_registry.register_logger(Image, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type Image")
 
@@ -82,7 +83,7 @@ class CompressedImageLogger(CPPLogger):
     def register(cls):
         try:
             from sensor_msgs.msg import CompressedImage
-            register_logger(CompressedImage, cls)
+            logger_registry.register_logger(CompressedImage, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type CompressedImage")
 
@@ -100,7 +101,7 @@ class DesignatorRequestLogger(CPPLogger):
     def register(cls):
         try:
             from designator_integration_msgs.msg import DesignatorRequest
-            register_logger(DesignatorRequest, cls)
+            logger_registry.register_logger(DesignatorRequest, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type DesignatorRequest")
 
@@ -118,7 +119,7 @@ class DesignatorResponseLogger(CPPLogger):
     def register(cls):
         try:
             from designator_integration_msgs.msg import DesignatorResponse
-            register_logger(DesignatorResponse, cls)
+            logger_registry.register_logger(DesignatorResponse, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type DesignatorResponse")
 
@@ -136,7 +137,7 @@ class DesignatorLogger(CPPLogger):
     def register(cls):
         try:
             from designator_integration_msgs.msg import Designator
-            register_logger(Designator, cls)
+            logger_registry.register_logger(Designator, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type Designator")
 
@@ -153,17 +154,16 @@ class TriangleMeshLogger(CPPLogger):
     def register(cls):
         try:
             from triangle_mesh_msgs.msg import TriangleMesh
-            register_logger(TriangleMesh, cls)
+            logger_registry.register_logger(TriangleMesh, cls)
         except ImportError:
             rospy.logwarn("Can't register for message type TriangleMesh")
 
 
-def register_special_loggers():
-    TFLogger.register()
-    PointCloudLogger.register()
-    ImageLogger.register()
-    CompressedImageLogger.register()
-    DesignatorRequestLogger.register()
-    DesignatorResponseLogger.register()
-    DesignatorLogger.register()
-    TriangleMeshLogger.register()
+TFLogger.register()
+PointCloudLogger.register()
+ImageLogger.register()
+CompressedImageLogger.register()
+DesignatorRequestLogger.register()
+DesignatorResponseLogger.register()
+DesignatorLogger.register()
+TriangleMeshLogger.register()
