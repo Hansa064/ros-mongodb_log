@@ -117,7 +117,7 @@ class MongoDBLogger(object):
         :return: True if this process should quit
         :rtype: bool
         """
-        return self.quit
+        return self.quit or rospy.is_shutdown()
 
     @property
     def process(self):
@@ -364,7 +364,7 @@ def main(argv):
 
     # Initialize the rospy node
     topic = args.topic[0]
-    name = "%sMongoDB_logger_%s" %(args.nodename_prefix, topic)
+    name = "%sMongoDB_logger_%s" % (args.nodename_prefix, topic)
     collection_name = topic.replace("/", "_") if topic[0] != "/" else topic[1:].replace("/", "_")
     nodename = "%smongodb_logger_%s" % (args.nodename_prefix, collection_name)
 
