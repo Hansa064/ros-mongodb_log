@@ -62,7 +62,7 @@ from random import randint
 class Counter(object):
     def __init__(self, value=None, lock=True):
         self.__value = value if value is not None else 0
-        self.mutex = lock if lock is not None else Lock()
+        self.mutex = Lock()
 
     def increment(self, by=1):
         with self.mutex:
@@ -357,7 +357,7 @@ class CPPLogger(MongoDBLogger):
         self.__process.wait()
 
 
-def create_worker(self, name, topic, mongodb_host, mongodb_port, mongodb_name, collname, no_specific=False):
+def create_worker(name, topic, mongodb_host, mongodb_port, mongodb_name, collname, no_specific=False):
         msg_class, _, _ = rostopic.get_topic_class(topic, blocking=True)
         logger = None
         if not no_specific and msg_class in SPECIAL_LOGGERS:
@@ -393,8 +393,12 @@ def main(argv):
 
     # Initialize the rospy node
     topic = args.topic[0]
-    name = "%sMongoDB_logger-%s" %(args.nodename_prefix, topic)
+    name = "%sMongoDB_logger_%s" %(args.nodename_prefix, topic)
+    collection_name = topic.replace("/", "_") if topic[0] != "/" else topic[1:].replace("/", "_")
+    nodename = "%smongodb_logger_%s" % (args.nodename_prefix, collection_name)
 
+    # Initialize the node
+    rospy.init_node(nodename, anonymous=False)
 
     try:
         rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % args.nodename_prefix).getPid()
@@ -406,17 +410,17 @@ def main(argv):
     from special_loggers import register_special_loggers
     register_special_loggers()
 
-    nodename = name.lower().replace("/", "_")
-    rospy.init_node(nodename, anonymous=False)
-
     # Create the worker
     logger = create_worker(name, topic, args.mongodb_host, args.mongodb_port,
-                  args.mongodb_name, topic.replace("/", "_"), args.no_specific)
+                  args.mongodb_name, collection_name, args.no_specific)
 
-    # Start the logger
-    logger.start()
-    logger.shutdown()
-
+    try:
+        # Start the logger
+        logger.start()
+    except KeyboardInterrupt:
+        rospy.loginfo("Keyboard interrupt received, shutting down!")
+    finally:
+        logger.shutdown()
 
 if __name__ == "__main__":
     main(sys.argv)
