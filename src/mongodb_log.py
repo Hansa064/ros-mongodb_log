@@ -179,8 +179,8 @@ class TopicLogger(MongoDBLogger):
     It simply dumps all messages received from the topic into the MongoDB.
     """
 
-    def __init__(self, topic, collname, mongodb_host, mongodb_port, mongodb_name, max_queuesize=QUEUE_MAXSIZE):
-        MongoDBLogger.__init__(self, topic, collname, mongodb_host, mongodb_port, mongodb_name)
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name, max_queuesize=QUEUE_MAXSIZE):
+        MongoDBLogger.__init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name)
         self.worker_out_counter = Counter()
         self.worker_in_counter = Counter()
         self.worker_drop_counter = Counter()
@@ -296,7 +296,7 @@ class CPPLogger(MongoDBLogger):
     This class implements a base class for spezialized loggers using other languages (like C++).
     """
 
-    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix, cpp_logger,
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name, cpp_logger,
                  additional_parameters):
         """
         Creates a new instance of the CPPLogger.
@@ -373,26 +373,28 @@ def create_worker(self, name, topic, mongodb_host, mongodb_port, mongodb_name, c
 
 def main(argv):
     parser = ArgumentParser(description="Start a new logger")
-    parser.add_argument("--nodename-prefix", dest="nodename_prefix",
+    parser.add_argument("--nodename-prefix", dest="nodename_prefix", type=str,
                         help="Prefix for worker node names", metavar="ROS_NODE_NAME",
                         default="")
-    parser.add_argument("--mongodb-host", dest="mongodb_host",
+    parser.add_argument("--mongodb-host", dest="mongodb_host", type=str,
                         help="Hostname of MongoDB", metavar="HOST",
                         default="localhost")
     parser.add_argument("--mongodb-port", dest="mongodb_port",
-                       help="Hostname of MongoDB", type="int",
+                       help="Hostname of MongoDB", type=int,
                        metavar="PORT", default=27017)
-    parser.add_argument("--mongodb-name", dest="mongodb_name",
+    parser.add_argument("--mongodb-name", dest="mongodb_name", type=str,
                       help="Name of DB in which to store values",
                       metavar="NAME", default="roslog")
     parser.add_argument("--no-specific", dest="no_specific", default=False,
                         action="store_true", help="Disable specific loggers")
-    parser.add_argument("topic", metavar="TOPIC", type=str, nargs="1",
+    parser.add_argument("topic", metavar="T", type=str, nargs=1,
                         help="The topic to subscribe to")
-    args = parser.parse_args()
+    args = parser.parse_args(rospy.myargv()[1:])
 
     # Initialize the rospy node
-    name = "%sMongoDB_logger%s" %(args.nodename_prefix, args.topic)
+    topic = args.topic[0]
+    name = "%sMongoDB_logger-%s" %(args.nodename_prefix, topic)
+
 
     try:
         rosgraph.masterapi.Master(NODE_NAME_TEMPLATE % args.nodename_prefix).getPid()
@@ -408,8 +410,8 @@ def main(argv):
     rospy.init_node(nodename, anonymous=False)
 
     # Create the worker
-    logger = create_worker(name, args.topic, args.mongodb_host, args.mongodb_port,
-                  args.mongodb_name, args.topic.replace("/", "_"), args.no_specific)
+    logger = create_worker(name, topic, args.mongodb_host, args.mongodb_port,
+                  args.mongodb_name, topic.replace("/", "_"), args.no_specific)
 
     # Start the logger
     logger.start()

@@ -7,7 +7,7 @@ __author__ = 'suturo'
 
 
 class TFLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_tf")
         # Log only when the preceeding entry of that
         # transformation had at least 0.100 vectorial and radial
@@ -17,8 +17,8 @@ class TFLogger(CPPLogger):
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_tf, falling back to generic logger (did not build package?)")
 
-        super(TFLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
-                                       node_path[0], additional_parameters)
+        super(TFLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name, node_path[0],
+                                       additional_parameters)
 
     @classmethod
     def register(cls):
@@ -35,13 +35,13 @@ class TFLogger(CPPLogger):
 
 
 class PointCloudLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
 
         node_path = find_node(PACKAGE_NAME, "mongodb_log_pcl")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_pcl, falling back to generic logger (did not build package?)")
-        super(PointCloudLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name,
-                                               nodename_prefix, node_path[0], None)
+        super(PointCloudLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                               node_path[0], None)
 
     @classmethod
     def register(cls):
@@ -53,12 +53,12 @@ class PointCloudLogger(CPPLogger):
 
 
 class ImageLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
 
         node_path = find_node(PACKAGE_NAME, "mongodb_log_img")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_img, falling back to generic logger (did not build package?)")
-        super(ImageLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix,
+        super(ImageLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
                                           node_path[0], None)
 
     @classmethod
@@ -71,12 +71,12 @@ class ImageLogger(CPPLogger):
 
 
 class CompressedImageLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_cimg")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_cimg, falling back to generic logger (did not build package?)")
-        super(CompressedImageLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port, mongodb_name,
-                                                    nodename_prefix, node_path[0], None)
+        super(CompressedImageLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                                    node_path[0], None)
 
     @classmethod
     def register(cls):
@@ -88,13 +88,13 @@ class CompressedImageLogger(CPPLogger):
 
 
 class DesignatorRequestLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator-request"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorRequestLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
-                                                      mongodb_name, nodename_prefix, node_path[0], additional_parameters)
+        super(DesignatorRequestLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                                      node_path[0], additional_parameters)
 
     @classmethod
     def register(cls):
@@ -106,13 +106,13 @@ class DesignatorRequestLogger(CPPLogger):
 
 
 class DesignatorResponseLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator-response"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorResponseLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
-                                                      mongodb_name, nodename_prefix, node_path[0], additional_parameters)
+        super(DesignatorResponseLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                                       node_path[0], additional_parameters)
 
     @classmethod
     def register(cls):
@@ -124,13 +124,13 @@ class DesignatorResponseLogger(CPPLogger):
 
 
 class DesignatorLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_desig")
         additional_parameters = ["-d" "designator"]
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_desig, falling back to generic logger (did not build package?)")
-        super(DesignatorLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
-                                                      mongodb_name, nodename_prefix, node_path[0], additional_parameters)
+        super(DesignatorLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                               node_path[0], additional_parameters)
 
     @classmethod
     def register(cls):
@@ -142,12 +142,12 @@ class DesignatorLogger(CPPLogger):
 
 
 class TriangleMeshLogger(CPPLogger):
-    def __init__(self, id_, topic, collname, mongodb_host, mongodb_port, mongodb_name, nodename_prefix):
+    def __init__(self, name, topic, collname, mongodb_host, mongodb_port, mongodb_name):
         node_path = find_node(PACKAGE_NAME, "mongodb_log_trimesh")
         if not node_path:
             raise RuntimeError("FAILED to detect mongodb_log_trimesh, falling back to generic logger (did not build package?)")
-        super(TriangleMeshLogger, self).__init__(id_, topic, collname, mongodb_host, mongodb_port,
-                                                 mongodb_name, nodename_prefix, node_path[0], None)
+        super(TriangleMeshLogger, self).__init__(name, topic, collname, mongodb_host, mongodb_port, mongodb_name,
+                                                 node_path[0], None)
 
     @classmethod
     def register(cls):
